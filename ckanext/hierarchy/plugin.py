@@ -1,20 +1,20 @@
+import logging
+
 import ckan.plugins as p
+from ckan import model
+from ckan.lib.plugins import DefaultOrganizationForm
+from ckan.common import c
+
 from ckanext.hierarchy.logic import action
 from ckanext.hierarchy import helpers
-from ckan.lib.plugins import DefaultOrganizationForm
-from ckan.lib.plugins import DefaultGroupForm
-import ckan.logic.schema as s
-from ckan.common import c, request
-import logging
-import re
 
 log = logging.getLogger(__name__)
 
 # This plugin is designed to work only these versions of CKAN
 p.toolkit.check_ckan_version(min_version='2.0')
 
-def custom_convert_from_extras(key, data, errors, context):
 
+def custom_convert_from_extras(key, data, errors, context):
     '''Converts values from extras, tailored for groups.'''
 
     # Set to empty string to remove Missing objects
@@ -24,18 +24,18 @@ def custom_convert_from_extras(key, data, errors, context):
     for data_key in data.keys():
         if (data_key[0] == 'extras'):
             data_value = data[data_key]
-            if( 'key' in data_value and data_value['key'] == key[-1]):
-               data[key] = data_value['value']
-               to_remove.append(data_key)
-               break
+            if 'key' in data_value and data_value['key'] == key[-1]:
+                data[key] = data_value['value']
+                to_remove.append(data_key)
+                break
     else:
         return
 
     for remove_key in to_remove:
         del data[remove_key]
 
-class HierarchyDisplay(p.SingletonPlugin):
 
+class HierarchyDisplay(p.SingletonPlugin):
     p.implements(p.IConfigurer, inherit=True)
     p.implements(p.IActions, inherit=True)
     p.implements(p.ITemplateHelpers, inherit=True)
@@ -63,120 +63,91 @@ class HierarchyDisplay(p.SingletonPlugin):
                 'group_tree_parents': helpers.group_tree_parents,
                 'group_tree_get_longname': helpers.group_tree_get_longname,
                 'group_tree_highlight': helpers.group_tree_highlight,
-                'get_allowable_parent_groups': helpers.get_allowable_parent_groups,
-                'is_include_children_selected': helpers.is_include_children_selected,
-                'add_children_selected_facet_title': helpers.add_children_selected_facet_title,
+                'get_allowable_parent_groups':
+                helpers.get_allowable_parent_groups,
+                'is_include_children_selected':
+                helpers.is_include_children_selected,
                 }
 
-
     # IPackageController
-    # Modify the search query to include the datasets from
-    # the children organizations in the result list
+
     def before_search(self, search_params):
-
-        ''' If include children selected the query string is modified '''
-        if not hasattr('c', 'fields'):
-            return search_params
-
-        def _children_name_list(children):
-            name_list = []
-            for child in children:
-                name = child.get('name', "")
-                name_list += [name] + _children_name_list(child.get('children', []))
-            return name_list
-            
-        def _delete_include_children(q_str):
-            q_str = re.sub('include_children: "(True|False)"', '', q_str, flags=re.IGNORECASE)
-            if len(q_str.strip()) == 0:
-                q_str = ""
-            return q_str        
-
-        # check first if this is a organization query
+        '''When searching an organization, optionally extend the search any
+        sub-organizations too. This is achieved by modifying the search options
+        before they go to SOLR.
+        '''
+        # Check if we're called from the organization controller, as detected
+        # by c being registered for this thread, and the existence of c.fields
+        # values
         try:
-            current_fields = c.fields
-            #log.debug("current_fields = " + str(current_fields))
-        except:
-            log.info("Cannot search in children organization, c.fields not available")
-            # remove the option from the search parameters
-            search_params['q'] = _delete_include_children(search_params.get('q',''))
+            if not isinstance(c.fields, list) and not hasattr(c, 'fields'):
+                return search_params
+        except TypeError:
+            return search_params
+        except AttributeError:
             return search_params
 
-        query = search_params.get('q', None)
-        c.include_children_selected = False
+        # e.g. search_params['q'] = u' owner_org:"id" include_children: "True"'
+        query = search_params.get('q')
+        fq = search_params.get('fq')
 
-        #log.debug("before_search: query = " + repr(query))
-        #log.debug("before_search (start): search_params = " + repr(search_params))
-
-        # fix the issues with multiple times repeated fields
-        # remove the param from the fields
+        # Fix the issues with multiple times repeated fields
+        # Remove the param from the fields - NB no longer works
+        # e.g. [('include_children', 'True')]
         new_fields = set()
-        for field,value in c.fields:
+        for field, value in c.fields:
             if (field != 'include_children'):
-                new_fields.add((field,value))
+                new_fields.add((field, value))
         c.fields = list(new_fields)
 
         # parse the query string to check if children are requested
-        if query:
-            base_query = []
-            #  remove whitespaces between fields and values
-            query = re.sub(': +', ':',  query)
-            for item in query.split(' '):
-                field = item.split(':')[0]
-                value = item.split(':')[-1]
-                # skip organization 
-                if (field == 'owner_org'):
-                    org_id = value
-                    continue
-                # skip include children andset option value
-                if (field == 'include_children'):
-                    if (value.upper() != '"FALSE"'):
-                        c.include_children_selected = True
-                    continue
-                base_query += [item]
-                
-        #log.debug("c.include_children_selected = " + str(c.include_children_selected))
+        c.include_children_selected = query and \
+            'include_children: "True"' in query
+
         if c.include_children_selected:
-        
-            # remove the option from the search parameters
-            search_params['q'] = _delete_include_children(search_params.get('q',''))
 
-           # add all the children organizations in an 'or' join
-            children = _children_name_list(helpers.group_tree_section(c.group_dict.get('id'), include_parents=False, include_siblings=False).get('children',[]))
-            
-            if(children):
-                
-                # add it back to fields
-                c.fields += [('include_children','True')]
-                
-                search_params['q'] = " ".join(base_query)
-                if (len(search_params['q'].strip())>0):
-                    search_params['q'] += ' AND '
-                search_params['q'] += '(organization:%s' % c.group_dict.get('name')
-                for name in children:
-                    if name:
-                        search_params['q'] += ' OR organization:%s' %  name
-                search_params['q'] += ")"
-                
-                # clear up the fq parameter
-                fq = search_params.get('fq', "")
-                if fq.find('owner_org:"' + c.group_dict.get('id') + '"')>=0:
-                     start = fq.find('owner_org:\"') 
-                     end = fq.find(c.group_dict.get('id') + '"')
-                     if end >= 0:
-                         len_extra = len(c.group_dict.get('id') + '"')
-                         search_params['fq'] = fq[0:start] + fq[end+len_extra:]
-                         if len(search_params['fq']) == 0:
-                             del search_params['fq']
+            # get a list of all the children organizations and include them in
+            # the search params
+            children_org_hierarchy = model.Group.get(c.group_dict.get('id')).\
+                get_children_group_hierarchy(type='organization')
+            children_names = [org[1] for org in children_org_hierarchy]
 
-                search_params['defType'] = 'edismax'
-        #log.debug("before_search (return): search_params = " + repr(search_params))
+            # remove include_children clause - it is a message for this func,
+            # not solr
+            query = query.replace('include_children: "True"', '')
+
+            if children_names:
+                # remove existing owner_org:"<parent>" clause - we'll replace
+                # it with the tree of orgs in a moment.
+                owner_org_q = 'owner_org:"{}"'.format(c.group_dict.get('id'))
+                # CKAN<=2.7 it's in the q field:
+                query = query.replace(owner_org_q, '')
+                # CKAN=2.8.x it's in the fq field:
+                search_params['fq'] = fq.replace(owner_org_q, '')
+
+                # add the org clause
+                query = query.strip()
+                if query:
+                    query += ' AND '
+                query += '({})'.format(
+                    ' OR '.join(
+                        'organization:{}'.format(org_name)
+                        for org_name in [c.group_dict.get('name')] +
+                        children_names))
+
+            search_params['q'] = query.strip()
+
+            # add it back to fields
+            # c.fields += [('include_children', 'True')]
+
+            # remove include_children from the filter-list - we have a checkbox
+            del c.fields_grouped['include_children']
+
         return search_params
 
 
 class HierarchyForm(p.SingletonPlugin, DefaultOrganizationForm):
-
     p.implements(p.IGroupForm, inherit=True)
-
 
     # IGroupForm
 
@@ -190,4 +161,5 @@ class HierarchyForm(p.SingletonPlugin, DefaultOrganizationForm):
         from pylons import tmpl_context as c
 
         group_id = data_dict.get('id')
-        c.allowable_parent_groups = helpers.get_allowable_parent_groups(group_id)
+        c.allowable_parent_groups = \
+            helpers.get_allowable_parent_groups(group_id)
