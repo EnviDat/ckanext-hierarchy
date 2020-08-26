@@ -1,34 +1,25 @@
+
 {% ckan_extends %}
-  {{ super() }}
 
-
-<!-- JSTree is included, but so far does nothing. Need to encapsulate it in a
-     'javascript module' -->
-{% block scripts %}
-  {{ super() }}
-  {% resource 'jstree/jquery.jstree.js' %}
-{% endblock %}
-
-
-  {% block organizations_list %}
-    {% if page or c.page or request.params %}
-      {% if page %}
-        {% if c.q %}
-         	{% snippet "organization/snippets/organization_list.html", organizations=page.items %}
+{% block breadcrumb_content %}
+    {% if pkg %}
+        {% set dataset = h.dataset_display_name(pkg) %}
+        {% if pkg.organization %}
+            {% set organization = pkg.organization.title %}
+            <li>{% link_for _('Organizations'), controller='organization', action='index' %}</li>
+            {% set parent_list =  h.group_tree_parents(pkg.organization.name)  %}
+            {% for parent_node in parent_list %}
+                <li>{% link_for  parent_node.title|truncate(35), controller='organization', action='read', id=parent_node.name %}</li>
+            {% endfor %}
+            <li>{% link_for organization|truncate(30), controller='organization', action='read', id=pkg.organization.name %}</li>
         {% else %}
-          	{% snippet "organization/snippets/organization_list.html", organizations=[] %}          
+            <li>{% link_for _('Datasets'), controller='dataset' if h.ckan_version() > '2.9' else 'package', action='search' %}</li>
         {% endif %}
-      {% elif c.page %}
-       {% if c.q %}
-                {% snippet "organization/snippets/organization_list.html", organizations=c.page.items %}
-        {% else %}
-                {% snippet "organization/snippets/organization_list.html", organizations=[] %}
-        {% endif %}
-      {% endif %}
+        <li{{ self.breadcrumb_content_selected() }}>{% link_for dataset|truncate(30), controller='dataset' if h.ckan_version() > '2.9' else 'package', action='read', id=pkg.name %}</li>
     {% else %}
-      {{ super() }}
-    {% endif %}
-  {% endblock %}
 
-  {% block page_pagination %}
-  {% endblock %}
+        <li>{% link_for _('Datasets'), controller='dataset' if h.ckan_version() > '2.9' else 'package', action='search' %}</li>
+        <li class="active"><a href="">{{ _('Create Dataset') }}</a></li>
+    {% endif %}
+
+{% endblock %}
