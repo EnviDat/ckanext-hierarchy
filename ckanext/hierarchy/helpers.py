@@ -97,3 +97,14 @@ def is_include_children_selected(fields):
     if request.params.get('include_children'):
         include_children_selected = True
     return include_children_selected
+
+
+def clean_include_children(fields):
+    if not fields or not isinstance(fields, list):
+        return []
+    new_fields = set()
+    for field, value in fields:
+        if (field != 'include_children'):
+            new_fields.add((field, value))
+    return list(new_fields)
+

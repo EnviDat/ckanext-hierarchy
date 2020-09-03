@@ -1,6 +1,6 @@
 {% ckan_extends %}
 
-{% if fields is not defined %}{% set fields = c.fields %}{% endif %}
+{% set fields = h.clean_include_children(fields) %}
 
 
 {% block search_input %}
